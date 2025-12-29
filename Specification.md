@@ -875,7 +875,191 @@ Location (Trạm sạc)
 
 ---
 
-### 5.5.2.1 Sample Requests - Locations Module
+### 5.5.2.1 Quy tắc Uniqueness của ID trong OCPI
+
+**⚠️ QUAN TRỌNG: Hiểu rõ phạm vi unique của các ID**
+
+OCPI sử dụng **composite key** (khóa tổng hợp) để đảm bảo uniqueness trong toàn bộ hệ thống roaming. ID chỉ cần unique trong phạm vi CPO, nhưng kết hợp với `country_code` và `party_id` sẽ tạo ra global uniqueness.
+
+#### Công thức Uniqueness
+
+```
+Global Unique ID = country_code + party_id + local_id
+```
+
+| ID Type | Phạm vi Unique | Global Identifier | Ví dụ |
+|---------|----------------|-------------------|-------|
+| **location_id** | Unique trong CPO | `{country}/{party}/{location_id}` | `VN/CPO/LOC-001` |
+| **evse_uid** | Unique trong CPO | `{country}/{party}/{location_id}/{evse_uid}` | `VN/CPO/LOC-001/EVSE-A` |
+| **connector_id** | Unique trong EVSE | `{country}/{party}/{loc_id}/{evse_uid}/{conn_id}` | `VN/CPO/LOC-001/EVSE-A/1` |
+| **session_id** | Unique trong CPO | `{country}/{party}/{session_id}` | `VN/CPO/SESSION-123` |
+| **tariff_id** | Unique trong CPO | `{country}/{party}/{tariff_id}` | `VN/CPO/TARIFF-001` |
+| **cdr_id** | Unique trong CPO | `{country}/{party}/{cdr_id}` | `VN/CPO/CDR-12345` |
+
+#### Giải thích chi tiết
+
+**1. Location ID** (`location_id`)
+- ✅ **Phạm vi**: Unique trong phạm vi **CPO của bạn**
+- ❌ **KHÔNG cần**: Unique toàn hệ thống roaming
+- 🔑 **Global key**: Được tạo bởi URL path `/{country}/{party}/{location_id}`
+
+**Ví dụ**:
+```
+CPO A có thể có: location_id = "LOC-001"
+CPO B có thể có: location_id = "LOC-001"
+
+Nhưng trong hệ thống roaming:
+- CPO A: VN/ABC/LOC-001  → Unique
+- CPO B: VN/XYZ/LOC-001  → Unique
+```
+
+**2. EVSE UID** (`evse_uid`)
+- ✅ **Phạm vi**: Unique trong phạm vi **CPO của bạn**
+- ❌ **KHÔNG cần**: Unique toàn hệ thống
+- 🔑 **Global key**: `{country}/{party}/{location_id}/{evse_uid}`
+
+**Ví dụ**:
+```
+CPO A - Location LOC-001 có: evse_uid = "EVSE-A"
+CPO A - Location LOC-002 có: evse_uid = "EVSE-A"  ← OK, vì khác location
+
+CPO B - Location LOC-001 có: evse_uid = "EVSE-A"  ← OK, vì khác party_id
+```
+
+**3. Connector ID** (`connector_id`)
+- ✅ **Phạm vi**: Unique trong phạm vi **EVSE**
+- ❌ **KHÔNG cần**: Unique trong CPO hay toàn hệ thống
+- 🔑 **Global key**: `{country}/{party}/{location_id}/{evse_uid}/{connector_id}`
+
+**Ví dụ**:
+```
+EVSE-A có connector_id: "1", "2"
+EVSE-B có connector_id: "1", "2"  ← OK, vì khác EVSE
+```
+
+#### Best Practices cho CPO
+
+**✅ Khuyến nghị**:
+
+1. **Location ID**: Sử dụng format có ý nghĩa
+   - ✅ `HCM-BTX-001` (City-District-Number)
+   - ✅ `STATION-001`
+   - ✅ `VINCOM-HN-L1`
+   - ❌ `1`, `2`, `3` (quá đơn giản, khó trace)
+
+2. **EVSE UID**: Nên unique trong toàn CPO (dù không bắt buộc)
+   - ✅ `EVSE-{location}-{number}` → `EVSE-HCM001-A`
+   - ✅ Sequential: `EVSE-00001`, `EVSE-00002`
+   - ⚠️ `EVSE-A`, `EVSE-B` (OK nhưng nên thêm prefix)
+
+3. **Connector ID**: Đơn giản, clear
+   - ✅ `1`, `2` (số thứ tự)
+   - ✅ `A`, `B` (chữ cái)
+   - ✅ `L` (Left), `R` (Right)
+
+#### Ví dụ thực tế đầy đủ
+
+```json
+{
+  "country_code": "VN",
+  "party_id": "ABC",
+  "id": "HCM-BTX-001",           // ← Unique trong CPO ABC
+  "evses": [
+    {
+      "uid": "EVSE-001",         // ← Unique trong CPO ABC (best practice)
+      "evse_id": "VN*ABC*E001",  // ← EVSE ID standard (optional)
+      "connectors": [
+        {
+          "id": "1",             // ← Unique trong EVSE-001
+          "standard": "IEC_62196_T2"
+        },
+        {
+          "id": "2",             // ← Unique trong EVSE-001
+          "standard": "CHADEMO"
+        }
+      ]
+    },
+    {
+      "uid": "EVSE-002",         // ← Unique trong CPO ABC
+      "evse_id": "VN*ABC*E002",
+      "connectors": [
+        {
+          "id": "1",             // ← OK: Unique trong EVSE-002
+          "standard": "IEC_62196_T2"
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### Tại sao OCPI thiết kế như vậy?
+
+**Lợi ích của Composite Key**:
+
+1. ✅ **Tự do cho CPO**: Mỗi CPO quản lý ID riêng, không cần phối hợp với CPO khác
+2. ✅ **Scalability**: Hàng ngàn CPO có thể tham gia mà không lo conflict
+3. ✅ **Simplicity**: ID đơn giản hơn, không cần UUID phức tạp
+4. ✅ **Readability**: `VN/ABC/LOC-001` dễ đọc hơn `550e8400-e29b-41d4-a716-446655440000`
+
+**Ví dụ conflict resolution**:
+
+```
+Scenario: 2 CPO đều có location_id = "STATION-001"
+
+CPO A (party_id=ABC):
+  URL: /locations/VN/ABC/STATION-001
+  Global ID: VN/ABC/STATION-001
+
+CPO B (party_id=XYZ):
+  URL: /locations/VN/XYZ/STATION-001
+  Global ID: VN/XYZ/STATION-001
+
+→ Không conflict vì khác party_id
+```
+
+#### Validation Rules
+
+**Hub sẽ validate**:
+
+| Validation | Rule | Lý do |
+|------------|------|-------|
+| **location_id unique** | Unique trong `{country}/{party}` | Tránh duplicate trong CPO |
+| **evse_uid unique** | Unique trong CPO | Best practice OCPI |
+| **connector_id unique** | Unique trong EVSE | Tránh confuse |
+| **ID format** | Alphanumeric + `-` `_` | URL safe |
+| **Max length** | 36 chars | Database optimization |
+
+#### Checklist cho CPO
+
+Khi thiết kế ID schema, đảm bảo:
+
+- [ ] `location_id` unique trong toàn bộ locations của CPO
+- [ ] `evse_uid` unique trong toàn bộ EVSEs của CPO (khuyến nghị)
+- [ ] `connector_id` unique trong mỗi EVSE
+- [ ] `session_id` unique trong toàn bộ sessions của CPO
+- [ ] `tariff_id` unique trong toàn bộ tariffs của CPO
+- [ ] `cdr_id` unique trong toàn bộ CDRs của CPO
+- [ ] Tất cả IDs đều stable (không thay đổi sau khi tạo)
+- [ ] Format IDs có ý nghĩa, dễ trace khi troubleshooting
+
+#### So sánh với các hệ thống khác
+
+| Hệ thống | Uniqueness Approach | Example |
+|----------|---------------------|---------|
+| **OCPI** | Composite key (country + party + id) | `VN/CPO/LOC-001` |
+| **OCPP** | ChargePointId unique toàn hệ thống | `VN-CPO-LOC001-EVSE001` |
+| **ISO 15118** | EVSE ID global theo ISO | `VN*ABC*E12345` |
+| **Database** | UUID toàn cục | `550e8400-e29b-41d4-a716...` |
+
+**OCPI approach cân bằng giữa**:
+- ✅ Simplicity (ID ngắn, dễ nhớ)
+- ✅ Autonomy (CPO tự quản lý)
+- ✅ Uniqueness (Guaranteed bởi composite key)
+
+---
+
+### 5.5.2.2 Sample Requests - Locations Module
 
 Phần này cung cấp các ví dụ request thực tế để CPO dễ dàng tích hợp.
 
