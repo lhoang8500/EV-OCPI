@@ -1,6 +1,7 @@
 # TÀI LIỆU ĐẶC TẢ YÊU CẦU KẾT NỐI CPO VÀO HUB TRUNG TÂM
 
 ## 📋 Mục lục
+- [Thuật ngữ](#thuật-ngữ)
 - [1. Tổng quan](#1-tổng-quan)
 - [2. Lợi ích khi kết nối](#2-lợi-ích-khi-kết-nối)
 - [3. Kiến trúc tổng thể](#3-kiến-trúc-tổng-thể)
@@ -8,6 +9,178 @@
 - [5. Yêu cầu kỹ thuật](#5-yêu-cầu-kỹ-thuật)
 - [6. Quy trình onboarding](#6-quy-trình-onboarding)
 - [7. Hỗ trợ và liên hệ](#7-hỗ-trợ-và-liên-hệ)
+
+---
+
+## 📖 Thuật ngữ
+
+### Thuật ngữ OCPI cốt lõi
+
+| Thuật ngữ | Tiếng Việt | Định nghĩa | Ví dụ |
+|-----------|------------|------------|-------|
+| **OCPI** | Giao thức sạc mở | Open Charge Point Interface - Giao thức chuẩn để trao đổi dữ liệu giữa các hệ thống sạc xe điện | OCPI 2.2.1 |
+| **CPO** | Nhà vận hành trạm sạc | Charge Point Operator - Đơn vị sở hữu và vận hành trạm sạc xe điện | ABC Charging Co. |
+| **eMSP** | Nhà cung cấp dịch vụ | e-Mobility Service Provider - Đơn vị cung cấp app/dịch vụ cho người dùng cuối | VinFast App, Xanh SM |
+| **Hub** | Trung tâm kết nối | Nền tảng trung gian kết nối CPO và eMSP, cho phép roaming | Hub Trung tâm |
+| **Roaming** | Kết nối liên mạng | Cho phép người dùng của eMSP A sạc tại trạm của CPO B | User Grab sạc tại trạm VinFast |
+
+### Thuật ngữ hạ tầng sạc
+
+| Thuật ngữ | Tiếng Việt | Định nghĩa | Cấu trúc |
+|-----------|------------|------------|----------|
+| **Location** | Trạm sạc | Vị trí địa lý có chứa 1 hoặc nhiều thiết bị sạc | Trạm sạc Bình Thạnh |
+| **EVSE** | Thiết bị sạc | Electric Vehicle Supply Equipment - Thiết bị cung cấp điện cho xe (1 cột sạc) | 1 Location có nhiều EVSE |
+| **Connector** | Đầu sạc/Vòi sạc | Đầu cắm vật lý để kết nối với xe điện | 1 EVSE có 1-2 Connector |
+| **Charge Point** | Điểm sạc | Tương đương EVSE, thuật ngữ khác | - |
+| **Charging Station** | Trạm sạc | Tương đương Location | - |
+
+**Cấu trúc phân cấp**:
+```
+Location (Trạm sạc)
+  └── EVSE (Thiết bị sạc/Cột sạc)
+       └── Connector (Đầu sạc/Vòi sạc)
+```
+
+### Thuật ngữ phiên sạc
+
+| Thuật ngữ | Tiếng Việt | Định nghĩa | Lifecycle |
+|-----------|------------|------------|-----------|
+| **Session** | Phiên sạc | Một lần sạc xe từ lúc cắm đến lúc rút vòi | START → ACTIVE → COMPLETED |
+| **CDR** | Bản ghi thanh toán | Charge Detail Record - Bản ghi chi tiết về phiên sạc đã hoàn thành, dùng cho thanh toán | Sau khi Session kết thúc |
+| **Token** | Mã xác thực | Thông tin nhận diện người dùng (RFID, QR, App User ID) | TOKEN-12345 |
+| **Authorization** | Ủy quyền | Quá trình xác thực người dùng có quyền sạc không | Check token trước khi start |
+| **Tariff** | Biểu phí/Bảng giá | Cấu trúc giá cho việc sạc điện | 3,500 VND/kWh |
+
+### Thuật ngữ kỹ thuật
+
+| Thuật ngữ | Tiếng Việt | Định nghĩa | Sử dụng |
+|-----------|------------|------------|---------|
+| **Credentials** | Thông tin xác thực | Thông tin để xác thực giữa 2 hệ thống (token, URL, party_id) | Credentials exchange |
+| **Module** | Module chức năng | Một nhóm chức năng trong OCPI (Locations, Sessions, Commands...) | OCPI có 10+ modules |
+| **Endpoint** | Điểm kết nối API | URL API để gọi chức năng cụ thể | POST /commands/START_SESSION |
+| **Sender** | Bên gửi | Role trong OCPI - bên chủ động gửi dữ liệu | CPO gửi Locations đến Hub |
+| **Receiver** | Bên nhận | Role trong OCPI - bên nhận và xử lý requests | CPO nhận Commands từ Hub |
+| **Party ID** | Mã định danh | Mã nhận diện duy nhất của CPO hoặc eMSP trong mạng lưới | "ABC", "VIN", "XYZ" |
+| **Country Code** | Mã quốc gia | Mã ISO 3166-1 alpha-2 của quốc gia | "VN", "TH", "SG" |
+
+### Thuật ngữ Commands
+
+| Thuật ngữ | Tiếng Việt | Định nghĩa | Ví dụ |
+|-----------|------------|------------|-------|
+| **START_SESSION** | Bắt đầu sạc | Lệnh yêu cầu CPO kích hoạt phiên sạc từ xa | User bấm "Bắt đầu sạc" trên app |
+| **STOP_SESSION** | Dừng sạc | Lệnh yêu cầu CPO dừng phiên sạc từ xa | User bấm "Dừng sạc" trên app |
+| **RESERVE_NOW** | Đặt chỗ | Lệnh đặt trước một connector | Đặt connector trước 15 phút |
+| **UNLOCK_CONNECTOR** | Mở khóa connector | Lệnh mở khóa vật lý của connector khi bị kẹt | Emergency unlock |
+| **Command ID** | Mã lệnh | ID unique cho mỗi command request | CMD-789ABC |
+
+### Thuật ngữ Connector Types
+
+| Thuật ngữ | Tên đầy đủ | Mô tả | Phổ biến |
+|-----------|-----------|-------|----------|
+| **CCS** | Combined Charging System | Chuẩn sạc nhanh DC phổ biến nhất | ✅ Rất phổ biến |
+| **Type 2** / **IEC 62196-T2** | Mennekes | Chuẩn sạc AC châu Âu | ✅ Rất phổ biến |
+| **CHAdeMO** | CHAdeMO | Chuẩn sạc nhanh DC của Nhật | ⚠️ Ít hơn |
+| **CCS2** / **Combo 2** | CCS Type 2 | Type 2 + DC pins | ✅ Rất phổ biến |
+| **GB/T** | Guobiao/Chinese Standard | Chuẩn sạc của Trung Quốc | ⚠️ Ít (ở VN) |
+
+### Thuật ngữ Status
+
+| Status | Module | Ý nghĩa | Khi nào |
+|--------|--------|---------|---------|
+| **AVAILABLE** | EVSE | Sẵn sàng sử dụng | Connector rảnh |
+| **CHARGING** | EVSE | Đang sạc | Xe đang sạc |
+| **BLOCKED** | EVSE | Bị chặn | Connector bị blocked |
+| **OUTOFORDER** | EVSE | Hỏng | Cần bảo trì |
+| **RESERVED** | EVSE | Đã đặt chỗ | User đã reserve |
+| **ACTIVE** | Session | Đang hoạt động | Phiên sạc đang active |
+| **COMPLETED** | Session | Đã hoàn thành | Phiên sạc đã xong |
+| **PENDING** | Session | Đang chờ | Chờ xe kết nối |
+| **INVALID** | Session | Không hợp lệ | Authorization failed |
+
+### Thuật ngữ Authentication
+
+| Thuật ngữ | Tiếng Việt | Định nghĩa | Ví dụ |
+|-----------|------------|------------|-------|
+| **TOKEN_A** | Token đăng ký | Token Hub cấp cho CPO lần đầu, dùng để credentials exchange | One-time use |
+| **TOKEN_B** | Token Hub ban đầu | Token Hub cung cấp để CPO reference trong POST credentials | Reference only |
+| **TOKEN_C** | Token vận hành | Token chính thức sau credentials exchange, dùng cho tất cả operations | Long-term token |
+| **Bearer Token** | Token xác thực | Format: `Authorization: Token {token_value}` | RFC 6750 |
+| **API Key** | Khóa API | Token để authenticate API calls | - |
+
+### Thuật ngữ Tariff
+
+| Thuật ngữ | Tiếng Việt | Định nghĩa | Đơn vị |
+|-----------|------------|------------|--------|
+| **ENERGY** | Giá theo điện năng | Giá tính theo kWh tiêu thụ | VND/kWh |
+| **TIME** | Giá theo thời gian | Giá tính theo thời gian sạc | VND/phút |
+| **FLAT** | Phí cố định | Phí cố định mỗi lần sạc | VND/lần |
+| **PARKING_TIME** | Phí đỗ xe | Phí đỗ xe trong khi sạc | VND/giờ |
+| **Step Size** | Bước nhảy | Đơn vị tính nhỏ nhất | 1 kWh, 60s |
+
+### Thuật ngữ kinh doanh
+
+| Thuật ngữ | Tiếng Việt | Định nghĩa | Giải thích |
+|-----------|------------|------------|------------|
+| **Roaming Agreement** | Hợp đồng roaming | Thỏa thuận cho phép interoperability giữa các mạng lưới | CPO A ⇄ CPO B |
+| **Settlement** | Thanh toán qua lại | Quá trình thanh toán giữa các bên | Monthly settlement |
+| **Clearing House** | Trung tâm thanh toán | Đơn vị trung gian xử lý thanh toán | Hub as clearing house |
+| **Revenue Sharing** | Chia sẻ doanh thu | Cách chia tiền giữa CPO, eMSP, Hub | 70% CPO, 20% eMSP, 10% Hub |
+| **SLA** | Cam kết dịch vụ | Service Level Agreement - Cam kết về chất lượng dịch vụ | 99.5% uptime |
+
+### Viết tắt thường gặp
+
+| Viết tắt | Tiếng Anh | Tiếng Việt |
+|----------|-----------|------------|
+| **OCPI** | Open Charge Point Interface | Giao thức điểm sạc mở |
+| **CPO** | Charge Point Operator | Nhà vận hành trạm sạc |
+| **eMSP** | e-Mobility Service Provider | Nhà cung cấp dịch vụ di động điện |
+| **EVSE** | Electric Vehicle Supply Equipment | Thiết bị cấp điện cho xe |
+| **EV** | Electric Vehicle | Xe điện |
+| **CDR** | Charge Detail Record | Bản ghi chi tiết sạc |
+| **kWh** | Kilowatt-hour | Kilowatt-giờ (đơn vị điện năng) |
+| **kW** | Kilowatt | Kilowatt (đơn vị công suất) |
+| **AC** | Alternating Current | Dòng điện xoay chiều |
+| **DC** | Direct Current | Dòng điện một chiều |
+| **RFID** | Radio-Frequency Identification | Nhận dạng tần số radio |
+| **QR** | Quick Response | Mã phản hồi nhanh |
+| **API** | Application Programming Interface | Giao diện lập trình ứng dụng |
+| **REST** | Representational State Transfer | Kiến trúc API RESTful |
+| **JSON** | JavaScript Object Notation | Định dạng dữ liệu JSON |
+| **HTTPS** | HTTP Secure | Giao thức HTTP bảo mật |
+| **TLS** | Transport Layer Security | Bảo mật tầng truyền tải |
+| **ISO** | International Organization for Standardization | Tổ chức tiêu chuẩn quốc tế |
+| **UTC** | Coordinated Universal Time | Giờ phối hợp quốc tế |
+
+### Đơn vị đo lường
+
+| Đơn vị | Tên đầy đủ | Ý nghĩa | Ví dụ |
+|--------|-----------|---------|-------|
+| **kWh** | Kilowatt-hour | Điện năng tiêu thụ | Sạc được 45.5 kWh |
+| **kW** | Kilowatt | Công suất sạc | Trạm sạc 50 kW |
+| **A** | Ampere | Cường độ dòng điện | Max 32A |
+| **V** | Volt | Điện áp | 400V AC, 500V DC |
+| **VND** | Vietnamese Dong | Đồng Việt Nam | 3,500 VND/kWh |
+| **s** | Second | Giây | Response < 30s |
+
+### Các trạng thái quan trọng cần nhớ
+
+#### EVSE Status Flow
+```
+PLANNED → AVAILABLE → CHARGING → AVAILABLE
+                   ↓
+              OUTOFORDER → (repair) → AVAILABLE
+                   ↓
+              REMOVED
+```
+
+#### Session Status Flow
+```
+(START_SESSION command)
+         ↓
+    PENDING → ACTIVE → COMPLETED
+         ↓              ↓
+     INVALID       (send CDR)
+```
 
 ---
 
@@ -589,6 +762,31 @@ Các yêu cầu sau là **BẮT BUỘC** để CPO có thể kết nối thành 
 
 ## 5.5 Chi tiết kỹ thuật theo module
 
+### 📋 Tổng quan CPO Role cho các modules
+
+Để CPO dễ dàng hiểu vai trò của mình trong từng module OCPI, bảng dưới đây tóm tắt CPO đóng vai trò **Sender** (gửi data) hay **Receiver** (nhận request):
+
+| Module | CPO Role | Direction | Mô tả | Example Endpoint |
+|--------|----------|-----------|-------|------------------|
+| **Credentials** | Sender & Receiver | ⇄ Bidirectional | Trao đổi credentials 2 chiều | `POST /credentials` |
+| **Locations** | **Sender** | → CPO to Hub | CPO gửi thông tin trạm sạc | `PUT /locations/{id}` |
+| **Tariffs** | **Sender** | → CPO to Hub | CPO gửi thông tin giá | `PUT /tariffs/{id}` |
+| **Sessions** | **Sender** | → CPO to Hub | CPO gửi thông tin phiên sạc | `PUT /sessions/{id}` |
+| **CDRs** | **Sender** | → CPO to Hub | CPO gửi bản ghi thanh toán | `POST /cdrs` |
+| **Commands** | **Receiver** | ← Hub to CPO | CPO nhận lệnh từ Hub | `POST /commands/START_SESSION` |
+| **Tokens** | **Receiver** | ← Hub to CPO | CPO xác thực token | `POST /tokens/{uid}/authorize` |
+
+**Giải thích**:
+- 🟢 **Sender** = CPO **chủ động gửi** data đến Hub (CPO là client, Hub là server)
+- 🔵 **Receiver** = CPO **nhận và xử lý** requests từ Hub (CPO là server, Hub là client)
+- 🟡 **Sender & Receiver** = Cả 2 chiều (bidirectional)
+
+**Quy tắc Authentication**:
+- CPO → Hub: Dùng **TOKEN_C** (Hub cấp cho CPO)
+- Hub → CPO: Dùng **CPO_TOKEN** (CPO cung cấp cho Hub trong credentials)
+
+---
+
 ### 5.5.1 Credentials Module
 
 **Mục đích**: Trao đổi thông tin xác thực giữa CPO và Hub
@@ -635,15 +833,15 @@ Location (Trạm sạc)
 
 **Endpoints cần implement**:
 
-| Method | Endpoint | Frequency | Mô tả |
-|--------|----------|-----------|-------|
-| GET | /locations | On request | Hub pull toàn bộ locations |
-| PUT | /locations/{country}/{party}/{id} | On create | CPO push location mới |
-| PATCH | /locations/{country}/{party}/{id} | On update | CPO update location |
-| PUT | /locations/{country}/{party}/{loc_id}/evses/{evse_id} | On create | Push EVSE mới |
-| PATCH | /locations/{country}/{party}/{loc_id}/evses/{evse_id} | On update | Update EVSE |
-| PUT | /locations/{...}/evses/{evse_id}/connectors/{conn_id} | On create | Push connector mới |
-| PATCH | /locations/{...}/evses/{evse_id}/connectors/{conn_id} | Real-time | Update connector status |
+| Method | Endpoint | CPO Role | Frequency | Mô tả |
+|--------|----------|----------|-----------|-------|
+| GET | /locations | Sender | On request | Hub pull toàn bộ locations |
+| PUT | /locations/{country}/{party}/{id} | Sender | On create | CPO push location mới |
+| PATCH | /locations/{country}/{party}/{id} | Sender | On update | CPO update location |
+| PUT | /locations/{country}/{party}/{loc_id}/evses/{evse_id} | Sender | On create | Push EVSE mới |
+| PATCH | /locations/{country}/{party}/{loc_id}/evses/{evse_id} | Sender | On update | Update EVSE |
+| PUT | /locations/{...}/evses/{evse_id}/connectors/{conn_id} | Sender | On create | Push connector mới |
+| PATCH | /locations/{...}/evses/{evse_id}/connectors/{conn_id} | Sender | Real-time | Update connector status |
 
 **Yêu cầu dữ liệu bắt buộc**:
 
@@ -1134,10 +1332,10 @@ Content-Type: application/json
 
 **Endpoints**:
 
-| Method | Endpoint | Mô tả |
-|--------|----------|-------|
-| GET | /tariffs | Hub pull toàn bộ tariffs |
-| PUT | /tariffs/{country}/{party}/{id} | Push/Update tariff |
+| Method | Endpoint | CPO Role | Mô tả |
+|--------|----------|----------|-------|
+| GET | /tariffs | Sender | Hub pull toàn bộ tariffs |
+| PUT | /tariffs/{country}/{party}/{id} | Sender | Push/Update tariff |
 
 **Tariff Structure**:
 ```json
@@ -1188,11 +1386,11 @@ Content-Type: application/json
 
 **Endpoints**:
 
-| Method | Endpoint | Trigger | Max Delay |
-|--------|----------|---------|-----------|
-| PUT | /sessions/{country}/{party}/{id} | Session starts | 10 seconds |
-| PATCH | /sessions/{country}/{party}/{id} | Status/meter updates | 30 seconds |
-| PATCH | /sessions/{country}/{party}/{id} | Session ends | 10 seconds |
+| Method | Endpoint | CPO Role | Trigger | Max Delay |
+|--------|----------|----------|---------|-----------|
+| PUT | /sessions/{country}/{party}/{id} | Sender | Session starts | 10 seconds |
+| PATCH | /sessions/{country}/{party}/{id} | Sender | Status/meter updates | 30 seconds |
+| PATCH | /sessions/{country}/{party}/{id} | Sender | Session ends | 10 seconds |
 
 **Giải thích các tham số URL**:
 
@@ -1374,9 +1572,10 @@ sequenceDiagram
 **Trigger**: Gửi CDR trong vòng 24h sau khi session kết thúc
 
 **Endpoint**:
-```
-POST /cdrs
-```
+
+| Method | Endpoint | CPO Role | Trigger | Max Delay |
+|--------|----------|----------|---------|-----------|
+| POST | /cdrs | Sender | Session completed | 24 hours |
 
 **CDR Object**:
 ```json
@@ -1419,12 +1618,12 @@ CPO phải implement các endpoints để nhận commands từ Hub:
 
 **Endpoints**:
 
-| Command | Endpoint | Priority | Response Time |
-|---------|----------|----------|---------------|
-| START_SESSION | POST /commands/START_SESSION | MANDATORY | < 30 seconds |
-| STOP_SESSION | POST /commands/STOP_SESSION | MANDATORY | < 30 seconds |
-| UNLOCK_CONNECTOR | POST /commands/UNLOCK_CONNECTOR | RECOMMENDED | < 30 seconds |
-| RESERVE_NOW | POST /commands/RESERVE_NOW | RECOMMENDED | < 30 seconds |
+| Command | Endpoint | CPO Role | Priority | Response Time |
+|---------|----------|----------|----------|---------------|
+| START_SESSION | POST /commands/START_SESSION | Receiver | MANDATORY | < 30 seconds |
+| STOP_SESSION | POST /commands/STOP_SESSION | Receiver | MANDATORY | < 30 seconds |
+| UNLOCK_CONNECTOR | POST /commands/UNLOCK_CONNECTOR | Receiver | RECOMMENDED | < 30 seconds |
+| RESERVE_NOW | POST /commands/RESERVE_NOW | Receiver | RECOMMENDED | < 30 seconds |
 
 **⚠️ Quan trọng về Command ID**:
 
