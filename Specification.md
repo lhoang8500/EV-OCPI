@@ -567,23 +567,38 @@ PHASE 4+: All Operations (Ongoing)
 
 ### 4.1.5 Ví dụ đầy đủ: Credentials Exchange
 
-**Step 1: CPO dùng TOKEN_A**
+**Step 1: CPO dùng TOKEN_A để POST credentials**
 ```http
 POST /ocpi/2.2.1/credentials HTTP/1.1
 Host: hub.example.com
-Authorization: Token a1b2c3d4-e5f6-4789-abcd-1234567890ab
+Authorization: Token TOKEN_A
 Content-Type: application/json
 
 {
-  "token": "cpo-secret-token-12345",
   "url": "https://cpo.example.com/ocpi/hub/",
-  "business_details": {
-    "name": "ABC CPO"
-  },
-  "party_id": "ABC",
-  "country_code": "VN"
+  "token": "cpo-secret-token-12345",
+  "roles": [
+    {
+      "role": "CPO",
+      "business_details": {
+        "name": "ABC Charge Point Operator",
+        "website": "https://abc-cpo.com"
+      },
+      "party_id": "ABC",
+      "country_code": "VN"
+    }
+  ]
 }
 ```
+
+**Giải thích cấu trúc**:
+- `url`: Endpoint mà Hub sẽ gọi vào CPO
+- `token`: CPO_TOKEN - token mà Hub sẽ dùng để authenticate
+- `roles[]`: Array các role mà CPO đảm nhận (thường chỉ có 1 role là CPO)
+  - `role`: "CPO" (hoặc "EMSP" nếu là mobility service provider)
+  - `party_id`: ID unique của CPO trong hệ thống (3 chars)
+  - `country_code`: Mã ISO 3166-1 alpha-2
+  - `business_details`: Thông tin công ty
 
 **Step 2: Hub response với TOKEN_C**
 ```http
@@ -592,23 +607,30 @@ Content-Type: application/json
 
 {
   "status_code": 1000,
+  "status_message": "Success",
   "data": {
-    "token": "c1111111-2222-3333-4444-555555555555",
     "url": "https://hub.example.com/ocpi/cpo/",
-    "business_details": {
-      "name": "Hub Trung tâm"
-    },
-    "party_id": "HUB",
-    "country_code": "VN"
-  }
+    "token": "TOKEN_C",
+    "roles": [
+      {
+        "role": "HUB",
+        "business_details": {
+          "name": "Hub Trung tâm OCPI"
+        },
+        "party_id": "HUB",
+        "country_code": "VN"
+      }
+    ]
+  },
+  "timestamp": "2025-12-29T10:00:00Z"
 }
 ```
 
-**Step 3: CPO cập nhật, dùng TOKEN_C từ giờ**
+**Step 3: CPO lưu TOKEN_C và bắt đầu operations**
 ```http
 PUT /ocpi/sender/2.2.1/locations/VN/ABC/LOC-001 HTTP/1.1
 Host: hub.example.com
-Authorization: Token c1111111-2222-3333-4444-555555555555
+Authorization: Token TOKEN_C
 Content-Type: application/json
 
 {
@@ -801,29 +823,99 @@ Các yêu cầu sau là **BẮT BUỘC** để CPO có thể kết nối thành 
 | Method | Endpoint | CPO Role | Mô tả |
 |--------|----------|----------|-------|
 | GET | /credentials | Receiver | Hub lấy thông tin credentials của CPO |
-| POST | /credentials | Receiver | Hub gửi credentials lần đầu |
+| POST | /credentials | Receiver | CPO gửi credentials lần đầu đến Hub |
 | PUT | /credentials | Receiver | Cập nhật credentials |
 | DELETE | /credentials | Receiver | Ngắt kết nối |
 
-**Request/Response Format**:
+**Credentials Object Format** (theo OCPI 2.2.1):
 ```json
 {
   "url": "https://cpo.example.com/ocpi/2.2.1/",
-  "token": "ebf3b399-779f-4497-9b9d-ac6ad3cc44d2",
-  "party_id": "CPO",
-  "country_code": "VN",
-  "business_details": {
-    "name": "Example CPO",
-    "website": "https://example-cpo.com"
-  }
+  "token": "cpo-secret-token-12345",
+  "roles": [
+    {
+      "role": "CPO",
+      "business_details": {
+        "name": "Example CPO Ltd",
+        "website": "https://example-cpo.com",
+        "logo": {
+          "url": "https://example-cpo.com/logo.png",
+          "thumbnail": "https://example-cpo.com/logo-thumb.png",
+          "category": "OPERATOR",
+          "type": "png",
+          "width": 512,
+          "height": 512
+        }
+      },
+      "party_id": "CPO",
+      "country_code": "VN"
+    }
+  ]
 }
 ```
 
+**Giải thích các fields**:
+
+| Field | Type | Required | Mô tả |
+|-------|------|----------|-------|
+| `url` | URL | ✅ | Base URL của CPO endpoints (HTTPS) |
+| `token` | string(64) | ✅ | Token mà Hub sẽ dùng để gọi vào CPO (CPO_TOKEN) |
+| `roles` | Role[] | ✅ | Array các role mà party đảm nhận |
+| `roles[].role` | enum | ✅ | CPO, EMSP, HUB, NAP, NSP, OTHER |
+| `roles[].business_details` | object | ✅ | Thông tin doanh nghiệp |
+| `roles[].party_id` | string(3) | ✅ | ID unique của party |
+| `roles[].country_code` | string(2) | ✅ | ISO 3166-1 alpha-2 |
+
 **Validation Rules**:
 - `country_code`: ISO 3166-1 alpha-2 (VN, TH, SG...)
-- `party_id`: 3 characters max, unique identifier
-- `token`: UUID format recommended
-- `url`: Must be HTTPS
+- `party_id`: 3 characters max, uppercase
+- `token`: Min 32 characters, unique
+- `url`: Must be HTTPS, valid format
+- `role`: Trong context này, CPO luôn dùng "CPO"
+
+**⚠️ Lưu ý quan trọng**:
+- CPO có thể có **nhiều roles** (ví dụ: vừa là CPO vừa là EMSP)
+- Mỗi role phải có `party_id` và `country_code` riêng
+- Trong hầu hết trường hợp, CPO chỉ có 1 role = "CPO"
+
+**Tại sao cần roles array?**
+OCPI được thiết kế để một party có thể đóng nhiều vai trò:
+- ✅ **CPO only**: Chỉ vận hành trạm sạc (phổ biến nhất)
+- ✅ **CPO + EMSP**: Vừa có trạm sạc, vừa có app cho end-users
+- ✅ **HUB**: Vai trò trung gian kết nối các parties
+
+**Ví dụ: Party đóng 2 roles**
+```json
+{
+  "url": "https://company.example.com/ocpi/",
+  "token": "multi-role-token-12345",
+  "roles": [
+    {
+      "role": "CPO",
+      "party_id": "ABC",
+      "country_code": "VN",
+      "business_details": {...}
+    },
+    {
+      "role": "EMSP",
+      "party_id": "ABM",
+      "country_code": "VN",
+      "business_details": {...}
+    }
+  ]
+}
+```
+
+**Role types trong OCPI**:
+
+| Role | Mô tả | Ví dụ |
+|------|-------|-------|
+| **CPO** | Charge Point Operator | Vận hành trạm sạc |
+| **EMSP** | e-Mobility Service Provider | Cung cấp app/service cho users |
+| **HUB** | Hub operator | Trung tâm kết nối |
+| **NAP** | Navigation Service Provider | Cung cấp dịch vụ điều hướng |
+| **NSP** | Network Service Provider | Nhà cung cấp mạng lưới |
+| **OTHER** | Other role | Vai trò khác |
 
 ### 5.5.2 Locations Module
 
@@ -2992,14 +3084,42 @@ curl -X POST https://api.hub.example.com/ocpi/2.2.1/credentials \
   -H "Content-Type: application/json" \
   -d '{
     "url": "https://cpo.example.com/ocpi/2.2.1/",
-    "token": "cpo-token-12345",
-    "party_id": "CPO",
-    "country_code": "VN",
-    "business_details": {
-      "name": "Example CPO Ltd",
-      "website": "https://example-cpo.com"
-    }
+    "token": "cpo-secret-token-12345",
+    "roles": [
+      {
+        "role": "CPO",
+        "business_details": {
+          "name": "Example CPO Ltd",
+          "website": "https://example-cpo.com"
+        },
+        "party_id": "CPO",
+        "country_code": "VN"
+      }
+    ]
   }'
+```
+
+Response:
+```json
+{
+  "status_code": 1000,
+  "status_message": "Success",
+  "data": {
+    "url": "https://hub.example.com/ocpi/cpo/",
+    "token": "TOKEN_C",
+    "roles": [
+      {
+        "role": "HUB",
+        "business_details": {
+          "name": "Hub Trung tâm"
+        },
+        "party_id": "HUB",
+        "country_code": "VN"
+      }
+    ]
+  },
+  "timestamp": "2025-12-29T10:00:00Z"
+}
 ```
 
 ### B.3 PUT Location
