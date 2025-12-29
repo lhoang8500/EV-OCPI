@@ -104,8 +104,9 @@ Location (Trạm sạc)
 | **TOKEN_A** | Token đăng ký | Token Hub cấp cho CPO lần đầu, dùng để credentials exchange | One-time use |
 | **TOKEN_C** | Token vận hành | Token Hub trả về sau credentials exchange, CPO dùng cho tất cả operations | Long-term token |
 | **CPO_TOKEN** | Token của CPO | Token CPO tạo và gửi cho Hub, Hub dùng khi gọi vào CPO | CPO self-generated |
-| **Bearer Token** | Token xác thực | Format: `Authorization: Token {token_value}` | RFC 6750 |
+| **Bearer Token** | Token xác thực | Format: `Authorization: Token {base64_encoded_token}` | RFC 6750 + OCPI 2.2.1-d2 |
 | **API Key** | Khóa API | Token để authenticate API calls | - |
+| **Base64 Encoding** | Mã hóa token | OCPI 2.2.1-d2 yêu cầu token phải được Base64 encode | `ZWJmM2IzOTk...` |
 
 ### Thuật ngữ Tariff
 
@@ -733,6 +734,133 @@ sequenceDiagram
 
 ## 5. Yêu cầu kỹ thuật
 
+### 5.0 Message Routing Headers (BẮT BUỘC)
+
+#### 5.0.1 Tổng quan
+
+**⚠️ YÊU CẦU QUAN TRỌNG**: Khi giao tiếp qua Hub, CPO **BẮT BUỘC** phải bao gồm **Message Routing Headers** trong tất cả requests đến Functional Modules.
+
+#### 5.0.2 Khi nào cần Routing Headers?
+
+Routing Headers **BẮT BUỘC** cho tất cả requests đến **Functional Modules** qua Hub:
+
+| Module | Cần Routing Headers | Lý do |
+|--------|---------------------|-------|
+| **Credentials** | ❌ NO | Peer-to-peer direct connection |
+| **Locations** | ✅ YES | Qua Hub routing |
+| **Tariffs** | ✅ YES | Qua Hub routing |
+| **Sessions** | ✅ YES | Qua Hub routing |
+| **CDRs** | ✅ YES | Qua Hub routing |
+| **Tokens** | ✅ YES | Qua Hub routing |
+| **Commands** | ✅ YES | Qua Hub routing |
+
+#### 5.0.3 Bốn Headers bắt buộc
+
+```http
+OCPI-from-country-code: VN
+OCPI-from-party-id: ABC
+OCPI-to-country-code: VN
+OCPI-to-party-id: HUB
+```
+
+| Header | Type | Mô tả | Ví dụ | Required |
+|--------|------|-------|-------|----------|
+| `OCPI-from-country-code` | CiString(2) | Mã quốc gia của bên GỬI | VN | ✅ |
+| `OCPI-from-party-id` | CiString(3) | Party ID của bên GỬI | ABC | ✅ |
+| `OCPI-to-country-code` | CiString(2) | Mã quốc gia của bên NHẬN | VN | ✅ |
+| `OCPI-to-party-id` | CiString(3) | Party ID của bên NHẬN | HUB | ✅ |
+
+**Tại sao cần Routing Headers?**
+
+Trong Hub topology, Hub kết nối nhiều CPO và eMSP. Routing headers cho phép Hub biết:
+- Message từ ai (`from-party-id`)
+- Message đến ai (`to-party-id`)
+- Cần forward request đến đâu
+
+**Ví dụ scenario**:
+```
+eMSP "MSP1" (user quét QR) 
+  → Hub forwards START_SESSION command
+  → Đến CPO "ABC" (dựa vào to-party-id: ABC)
+  
+CPO "ABC" creates session
+  → Hub forwards session update
+  → Đến eMSP "MSP1" (dựa vào original from-party-id)
+```
+
+#### 5.0.4 Ví dụ Request với đầy đủ Headers
+
+**CPO → Hub: Push Location**
+
+```http
+PUT /ocpi/sender/2.2.1/locations/VN/ABC/LOC-001 HTTP/1.1
+Host: hub.example.com
+Authorization: Token ZWJmM2IzOTktNzc5Zi00NDk3LTliOWQtYWM2YWQzY2M0NGQy
+Content-Type: application/json
+OCPI-from-country-code: VN
+OCPI-from-party-id: ABC
+OCPI-to-country-code: VN
+OCPI-to-party-id: HUB
+
+{
+  "country_code": "VN",
+  "party_id": "ABC",
+  "id": "LOC-001",
+  ...
+}
+```
+
+**Hub → CPO: Send Command**
+
+```http
+POST /commands/START_SESSION HTTP/1.1
+Host: cpo-abc.example.com
+Authorization: Token Y3BvLXRva2VuLWFiYzEyMw==
+Content-Type: application/json
+OCPI-from-country-code: VN
+OCPI-from-party-id: HUB
+OCPI-to-country-code: VN
+OCPI-to-party-id: ABC
+
+{
+  "response_url": "https://hub.example.com/ocpi/2.2.1/commands/START_SESSION/CMD-123",
+  ...
+}
+```
+
+#### 5.0.5 Validation Rules
+
+Hub sẽ validate:
+
+| Validation | Rule | HTTP Error nếu sai |
+|------------|------|-------------------|
+| **Headers present** | Tất cả 4 headers phải có | 400 Bad Request |
+| **Format** | CiString, length đúng | 400 Bad Request |
+| **from-party-id** | Phải match với credentials | 401 Unauthorized |
+| **to-party-id** | Phải tồn tại trong Hub | 404 Not Found |
+| **country-code** | ISO 3166-1 alpha-2 | 400 Bad Request |
+
+#### 5.0.6 Error Response khi thiếu Headers
+
+```http
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+
+{
+  "status_code": 2001,
+  "status_message": "Missing required OCPI routing headers",
+  "timestamp": "2025-12-29T10:00:00Z",
+  "data": {
+    "missing_headers": [
+      "OCPI-from-country-code",
+      "OCPI-from-party-id"
+    ]
+  }
+}
+```
+
+---
+
 ### 5.1 Yêu cầu tối thiểu (MANDATORY)
 
 Các yêu cầu sau là **BẮT BUỘC** để CPO có thể kết nối thành công vào Hub:
@@ -1117,6 +1245,59 @@ CPO B (party_id=XYZ):
 → Không conflict vì khác party_id
 ```
 
+#### EVSE UID Best Practices
+
+**⚠️ CẢNH BÁO QUAN TRỌNG từ OCPI 2.2.1**:
+
+> "The **evse_uid** should NOT be based on the hardware serial number of the physical EVSE, as the same hardware unit might be moved to a different Location or even a different CPO."
+
+**Vấn đề khi dùng Serial Number làm EVSE UID**:
+
+```
+Scenario: CPO di chuyển cột sạc
+
+Ban đầu:
+  Location: "HCM-BTX-001"
+  EVSE UID: "SN-HW-12345678" (dùng serial number)
+  
+Sau khi di chuyển:
+  Location: "HN-CG-002" (địa điểm mới)
+  EVSE UID: "SN-HW-12345678" (KHÔNG ĐỔI - vì là serial)
+  
+Vấn đề:
+  - Session cũ reference "SN-HW-12345678" tại "HCM-BTX-001"
+  - EVSE mới có cùng UID "SN-HW-12345678" tại "HN-CG-002"
+  - Data conflict! Uniqueness bị phá vỡ
+```
+
+**✅ Recommended EVSE UID Patterns**:
+
+| Pattern | Format | Example | Pros | Cons |
+|---------|--------|---------|------|------|
+| **Location-based** | `{location_id}-EVSE-{seq}` | `HCM-BTX-001-EVSE-01` | Dễ trace, clear hierarchy | Phải update khi move |
+| **Sequential** | `EVSE-{global_seq}` | `EVSE-00001` | Simple, stable | Ít context |
+| **UUID-based** | `{uuid_v4}` | `a8f5f167-4f74-4c14...` | Guaranteed unique | Khó đọc |
+
+**❌ Pattern to AVOID**:
+```
+SN-{hardware_serial}     ← BAD! Tied to hardware
+SN-HW-12345678          ← BAD!
+SN-ABB-987654           ← BAD!
+```
+
+**Khuyến nghị**: Dùng **Location-based pattern** cho dễ quản lý và troubleshooting.
+
+**Internal Mapping**: CPO nên maintain mapping table giữa EVSE UID và hardware serial:
+```sql
+CREATE TABLE evse_hardware_mapping (
+    evse_uid VARCHAR(36) PRIMARY KEY,
+    hardware_serial VARCHAR(50) NOT NULL,
+    location_id VARCHAR(36),
+    installed_date TIMESTAMP,
+    UNIQUE(hardware_serial)
+);
+```
+
 #### Validation Rules
 
 **Hub sẽ validate**:
@@ -1125,9 +1306,10 @@ CPO B (party_id=XYZ):
 |------------|------|-------|
 | **location_id unique** | Unique trong `{country}/{party}` | Tránh duplicate trong CPO |
 | **evse_uid unique** | Unique trong CPO | Best practice OCPI |
+| **evse_uid stability** | KHÔNG đổi khi di chuyển hardware | Maintain data integrity |
 | **connector_id unique** | Unique trong EVSE | Tránh confuse |
 | **ID format** | Alphanumeric + `-` `_` | URL safe |
-| **Max length** | 36 chars | Database optimization |
+| **Max length** | 36 chars (CiString) | Database optimization |
 
 #### Checklist cho CPO
 
@@ -1135,12 +1317,14 @@ Khi thiết kế ID schema, đảm bảo:
 
 - [ ] `location_id` unique trong toàn bộ locations của CPO
 - [ ] `evse_uid` unique trong toàn bộ EVSEs của CPO (khuyến nghị)
+- [ ] `evse_uid` **KHÔNG dựa trên hardware serial number**
 - [ ] `connector_id` unique trong mỗi EVSE
 - [ ] `session_id` unique trong toàn bộ sessions của CPO
 - [ ] `tariff_id` unique trong toàn bộ tariffs của CPO
 - [ ] `cdr_id` unique trong toàn bộ CDRs của CPO
 - [ ] Tất cả IDs đều stable (không thay đổi sau khi tạo)
 - [ ] Format IDs có ý nghĩa, dễ trace khi troubleshooting
+- [ ] Có internal mapping giữa evse_uid và hardware serial number
 
 #### So sánh với các hệ thống khác
 
@@ -1168,10 +1352,16 @@ Phần này cung cấp các ví dụ request thực tế để CPO dễ dàng t�
 ```http
 PUT /ocpi/sender/2.2.1/locations/VN/CPO/HCM-BTX-001 HTTP/1.1
 Host: hub.example.com
-Authorization: Token TOKEN_C
+Authorization: Token VE9LRU5fQw==
 Content-Type: application/json
+OCPI-from-country-code: VN
+OCPI-from-party-id: CPO
+OCPI-to-country-code: VN
+OCPI-to-party-id: HUB
 ```
-**Lưu ý**: Sử dụng **TOKEN_C** vì đây là CPO gửi data đến Hub (Sender role)
+**Lưu ý**: 
+- Sử dụng **TOKEN_C** (đã Base64 encode) vì đây là CPO gửi data đến Hub (Sender role)
+- **BẮT BUỘC** có 4 Routing Headers
 
 **Body**:
 ```json
@@ -1294,6 +1484,8 @@ Content-Type: application/json
 }
 ```
 
+**Lưu ý Response Format**: Response wrapped trong OCPI standard structure với `status_code`, `status_message`, `timestamp`.
+
 ---
 
 #### Sample 2: Cập nhật trạng thái EVSE (AVAILABLE → CHARGING)
@@ -1302,8 +1494,12 @@ Content-Type: application/json
 ```http
 PATCH /ocpi/sender/2.2.1/locations/VN/CPO/HCM-BTX-001/evses/EVSE-001 HTTP/1.1
 Host: hub.example.com
-Authorization: Token TOKEN_C
+Authorization: Token VE9LRU5fQw==
 Content-Type: application/json
+OCPI-from-country-code: VN
+OCPI-from-party-id: CPO
+OCPI-to-country-code: VN
+OCPI-to-party-id: HUB
 ```
 
 **Body**:
@@ -1612,6 +1808,87 @@ Content-Type: application/json
 
 ---
 
+#### Sample Response Format (OCPI Wrapper)
+
+**⚠️ QUAN TRỌNG**: Tất cả OCPI responses phải wrapped trong cấu trúc chuẩn:
+
+```json
+{
+  "data": {...},
+  "status_code": 1000,
+  "status_message": "Success",
+  "timestamp": "2025-12-29T10:00:00Z"
+}
+```
+
+| Field | Type | Required | Mô tả |
+|-------|------|----------|-------|
+| `data` | object/array | ✅ (if status_code=1000) | Dữ liệu thực tế |
+| `status_code` | integer | ✅ | OCPI status code (1000=success, 2xxx=client error, 3xxx=server error) |
+| `status_message` | string | ❌ | Human-readable message |
+| `timestamp` | RFC 3339 | ✅ | Response timestamp |
+
+**Success Response Examples**:
+
+```json
+// PUT /locations/VN/ABC/LOC-001 - Success
+{
+  "status_code": 1000,
+  "status_message": "Location created successfully",
+  "timestamp": "2025-12-29T10:00:05Z"
+}
+```
+
+```json
+// GET /locations/VN/ABC/LOC-001 - Success with data
+{
+  "data": {
+    "country_code": "VN",
+    "party_id": "ABC",
+    "id": "LOC-001",
+    "name": "Trạm sạc Bình Thạnh",
+    ...
+  },
+  "status_code": 1000,
+  "status_message": "Success",
+  "timestamp": "2025-12-29T10:00:00Z"
+}
+```
+
+**Error Response Examples**:
+
+```json
+// 400 Bad Request - Missing field
+{
+  "status_code": 2001,
+  "status_message": "Missing required field: country_code",
+  "timestamp": "2025-12-29T10:00:00Z"
+}
+```
+
+```json
+// 404 Not Found
+{
+  "status_code": 2002,
+  "status_message": "Location VN/ABC/LOC-999 not found",
+  "timestamp": "2025-12-29T10:00:00Z"
+}
+```
+
+**OCPI Status Codes**:
+
+| Code | Category | Meaning |
+|------|----------|---------|
+| **1000** | Success | Request successful |
+| **2000** | Client Error | Generic client error |
+| **2001** | Client Error | Invalid or missing parameters |
+| **2002** | Client Error | Unknown location/resource |
+| **3000** | Server Error | Generic server error |
+
+**LƯU Ý**: OCPI thường dùng HTTP 200 OK kể cả khi có lỗi, và dùng `status_code` để phân biệt!
+
+---
+
 ### 5.5.3 Tariffs Module
 
 **Authentication**: Sử dụng **TOKEN_C** cho tất cả requests (CPO → Hub)
@@ -1867,7 +2144,7 @@ sequenceDiagram
 |--------|----------|----------|---------|-----------|
 | POST | /cdrs | Sender | Session completed | 24 hours |
 
-**CDR Object**:
+**CDR Object** (với Price Object structure):
 ```json
 {
   "country_code": "VN",
@@ -1887,20 +2164,76 @@ sequenceDiagram
   "connector_id": "1",
   "meter_id": "METER-001",
   "currency": "VND",
-  "total_cost": 89250.00,
+  "total_cost": {
+    "excl_vat": 80681.82,
+    "incl_vat": 89250.00
+  },
+  "total_fixed_cost": {
+    "excl_vat": 0.00,
+    "incl_vat": 0.00
+  },
   "total_energy": 25.5,
+  "total_energy_cost": {
+    "excl_vat": 72727.27,
+    "incl_vat": 80000.00
+  },
   "total_time": 1.0,
-  "charging_periods": [...],
+  "total_time_cost": {
+    "excl_vat": 7954.55,
+    "incl_vat": 8750.00
+  },
+  "total_parking_time": 0.0,
+  "total_parking_cost": {
+    "excl_vat": 0.00,
+    "incl_vat": 0.00
+  },
+  "total_reservation_cost": {
+    "excl_vat": 0.00,
+    "incl_vat": 0.00
+  },
   "remark": "Normal charging session",
+  "charging_periods": [...],
   "last_updated": "2025-12-28T11:35:00Z"
 }
 ```
 
+**⚠️ Price Object Structure (QUAN TRỌNG)**:
+
+Theo OCPI 2.2.1, tất cả các trường cost phải là **Price Object**, KHÔNG phải number đơn thuần:
+
+```typescript
+interface Price {
+  excl_vat: number;   // Giá CHƯA bao gồm VAT (bắt buộc)
+  incl_vat?: number;  // Giá ĐÃ bao gồm VAT (optional)
+}
+```
+
+| Field | Type | Required | Mô tả |
+|-------|------|----------|-------|
+| `excl_vat` | number(2) | ✅ | Giá chưa VAT, 2 decimals |
+| `incl_vat` | number(2) | ❌ | Giá đã VAT, 2 decimals (optional) |
+
+**Ví dụ tính toán Price với VAT 10%**:
+```python
+def calculate_price_with_vat(excl_vat, vat_rate=0.10):
+    """Calculate Price object with VAT (Vietnam VAT = 10%)"""
+    return {
+        "excl_vat": round(excl_vat, 2),
+        "incl_vat": round(excl_vat * (1 + vat_rate), 2)
+    }
+
+# Example
+energy_cost_excl_vat = 72727.27
+price = calculate_price_with_vat(energy_cost_excl_vat, 0.10)
+# Result: {"excl_vat": 72727.27, "incl_vat": 80000.00}
+```
+
 **Validation**:
-- CDR ID must be unique
+- CDR ID must be unique (CiString)
 - Total cost must match tariff calculation
 - Energy values must be non-negative
-- Timestamps must be chronological
+- Timestamps must be chronological (RFC 3339 format)
+- All cost fields must be Price Objects (not plain numbers)
 
 ### 5.5.6 Commands Module (Receiver)
 
@@ -1998,7 +2331,7 @@ CPO gửi POST request đến URL: `https://hub.example.com/ocpi/2.2.1/commands/
 Thành công:
 ```json
 {
-  "result": "SUCCESS",
+  "result": "ACCEPTED",
   "message": "Charging session started successfully",
   "session_id": "SESSION-67890",
   "connector_id": "1",
@@ -2006,11 +2339,22 @@ Thành công:
 }
 ```
 
-Thất bại:
+**⚠️ LƯU Ý**: Dùng `"ACCEPTED"` (KHÔNG phải `"SUCCESS"`). OCPI CommandResultType enum không có giá trị "SUCCESS".
+
+Thất bại - EVSE đang bận:
 ```json
 {
-  "result": "FAILED",
+  "result": "EVSE_OCCUPIED",
   "message": "Connector is currently in use by another vehicle",
+  "timestamp": "2025-12-28T10:30:45Z"
+}
+```
+
+Thất bại - Token không hợp lệ:
+```json
+{
+  "result": "REJECTED",
+  "message": "Token not authorized for this charging network",
   "timestamp": "2025-12-28T10:30:45Z"
 }
 ```
@@ -2117,7 +2461,7 @@ CPO gửi POST request đến URL: `https://hub.example.com/ocpi/2.2.1/commands/
 Thành công:
 ```json
 {
-  "result": "SUCCESS",
+  "result": "ACCEPTED",
   "message": "Charging session stopped successfully",
   "session_id": "SESSION-67890",
   "final_kwh": 25.8,
@@ -2129,7 +2473,7 @@ Thành công:
 Thất bại:
 ```json
 {
-  "result": "FAILED",
+  "result": "REJECTED",
   "message": "Session not found or already completed",
   "session_id": "SESSION-67890",
   "timestamp": "2025-12-28T11:45:22Z"
@@ -2172,32 +2516,59 @@ sequenceDiagram
     App->>User: Hoàn tất sạc<br/>25.8 kWh - 90,300 VND
 ```
 
-### 5.5.6.3 Tổng hợp Result Codes
+### 5.5.6.3 Tổng hợp Result Codes (CommandResultType Enum)
+
+**⚠️ QUAN TRỌNG**: OCPI 2.2.1 định nghĩa CommandResultType enum. CPO phải dùng **ĐÚNG** các giá trị này.
 
 | Result Code | HTTP Status | Mô tả | Khi nào xảy ra |
 |-------------|-------------|-------|----------------|
-| `ACCEPTED` | 200 | Command được chấp nhận | CPO nhận được và sẽ xử lý |
-| `REJECTED` | 200 | Command bị từ chối | Connector busy, invalid params |
-| `SUCCESS` | N/A | Thực thi thành công | Command completed successfully (gửi về response_url) |
-| `FAILED` | N/A | Thực thi thất bại | Error during execution (gửi về response_url) |
-| `NOT_SUPPORTED` | 200 | Command không được hỗ trợ | Command type not implemented |
-| `UNKNOWN_SESSION` | 200 | Session không tồn tại | Session ID not found |
+| `ACCEPTED` | 200 | ✅ Command thực thi thành công | Command completed successfully |
+| `REJECTED` | 200 | ❌ Command bị từ chối | Invalid params, business logic rejection |
+| `EVSE_OCCUPIED` | 200 | ❌ EVSE đang bận | EVSE đang sạc xe khác |
+| `EVSE_INOPERATIVE` | 200 | ❌ EVSE hỏng | EVSE không hoạt động |
+| `FAILED` | 200 | ❌ Lỗi chung | Lỗi không xác định |
+| `NOT_SUPPORTED` | 200 | ❌ Command không hỗ trợ | Command type không được implement |
+| `TIMEOUT` | 200 | ❌ Timeout | Quá thời gian chờ (>30s) |
+| `UNKNOWN_RESERVATION` | 200 | ❌ Reservation không tồn tại | Không tìm thấy reservation ID |
+| `CANCELED_RESERVATION` | 200 | ℹ️ Reservation đã bị cancel | Đặt chỗ đã bị hủy |
+
+**❌ KHÔNG TỒN TẠI**: Giá trị `"SUCCESS"` không có trong OCPI CommandResultType enum!
 
 **Phân biệt Response Types**:
 
-| Response Type | Timing | Mục đích | HTTP Status |
-|---------------|--------|----------|-------------|
-| **Immediate Response** | Ngay lập tức (< 1s) | Confirm Hub rằng CPO đã nhận được command | 200 OK |
-| **Async Result** | Sau khi xử lý (0-30s) | Báo kết quả thực tế sau khi thực thi command | POST đến response_url |
+| Response Type | Timing | Mục đích | HTTP Status | Result Values |
+|---------------|--------|----------|-------------|---------------|
+| **Immediate Response** | Ngay lập tức (< 1s) | Confirm Hub rằng CPO đã nhận được command | 200 OK | `ACCEPTED`, `REJECTED`, `NOT_SUPPORTED` |
+| **Async Result** | Sau khi xử lý (0-30s) | Báo kết quả thực tế sau khi thực thi command | POST đến response_url | `ACCEPTED`, `EVSE_OCCUPIED`, `EVSE_INOPERATIVE`, `FAILED`, `TIMEOUT`, etc. |
+
+**Error Handling Matrix**:
+
+| Scenario | Immediate Response | Async Result |
+|----------|-------------------|--------------|
+| Command nhận được OK | `ACCEPTED` | `ACCEPTED` (if success) hoặc `FAILED`/`EVSE_OCCUPIED` (if error) |
+| Invalid parameters | `REJECTED` | N/A (không gửi async) |
+| EVSE offline | `ACCEPTED` | `EVSE_INOPERATIVE` |
+| EVSE đang sạc xe khác | `ACCEPTED` | `EVSE_OCCUPIED` |
+| Token không hợp lệ | `ACCEPTED` | `REJECTED` |
+| Timeout (>30s) | `ACCEPTED` | `TIMEOUT` |
+| Command không support | `NOT_SUPPORTED` | N/A |
 
 ### 5.5.6.4 Error Scenarios và Xử lý
 
 **Scenario 1: Connector đang được sử dụng**
 ```json
-// START_SESSION response
+// START_SESSION immediate response
 {
-  "result": "REJECTED",
-  "message": "Connector is currently charging another vehicle (Session: SESSION-11111)"
+  "result": "ACCEPTED",
+  "timeout": 30,
+  "message": "Command accepted, processing..."
+}
+
+// START_SESSION async result
+{
+  "result": "EVSE_OCCUPIED",
+  "message": "Connector is currently charging another vehicle (Session: SESSION-11111)",
+  "timestamp": "2025-12-28T10:30:45Z"
 }
 ```
 
@@ -2205,7 +2576,7 @@ sequenceDiagram
 ```json
 // START_SESSION async result
 {
-  "result": "FAILED",
+  "result": "REJECTED",
   "message": "Token USER-TOKEN-99999 is not authorized for this charging network",
   "timestamp": "2025-12-28T10:30:45Z"
 }
@@ -2215,7 +2586,7 @@ sequenceDiagram
 ```json
 // START_SESSION async result
 {
-  "result": "FAILED",
+  "result": "EVSE_INOPERATIVE",
   "message": "EVSE EVSE-02 is currently offline or in error state",
   "timestamp": "2025-12-28T10:30:45Z"
 }
@@ -2225,10 +2596,20 @@ sequenceDiagram
 ```json
 // STOP_SESSION async result
 {
-  "result": "SUCCESS",
+  "result": "ACCEPTED",
   "message": "Session already completed (user unplugged)",
   "session_id": "SESSION-67890",
   "timestamp": "2025-12-28T11:45:22Z"
+}
+```
+
+**Scenario 5: Command timeout**
+```json
+// Async result (gửi sau >30 giây)
+{
+  "result": "TIMEOUT",
+  "message": "Command execution timeout",
+  "timestamp": "2025-12-28T10:31:20Z"
 }
 ```
 
@@ -2784,16 +3165,78 @@ Staging: 123.45.68.0/24
 | **Data Freshness** | Status updates < 30 seconds | From event to Hub |
 | **Error Rate** | < 1% of requests | 5xx errors |
 
-### 5.7.3 Data Format
+### 5.7.3 Data Format & Standards
 
-| Aspect | Specification |
-|--------|---------------|
-| **Encoding** | UTF-8 |
-| **Date/Time** | ISO 8601 (YYYY-MM-DDTHH:mm:ssZ) |
-| **Timezone** | UTC for all timestamps |
-| **Number Format** | Decimal with dot separator (e.g., 25.5) |
-| **Currency** | ISO 4217 codes (VND, USD, EUR...) |
-| **Coordinates** | WGS84 decimal degrees |
+#### Kiểu dữ liệu OCPI
+
+| Data Type | OCPI Type | Mô tả | Ví dụ | Sử dụng cho |
+|-----------|-----------|-------|-------|-------------|
+| **CiString** | Case Insensitive String | Chuỗi không phân biệt hoa thường | "ABC" == "abc" | party_id, country_code, location_id, evse_uid, connector_id, session_id |
+| **String** | Standard string | Chuỗi phân biệt hoa thường | "ABC" != "abc" | name, address, description |
+| **DateTime** | RFC 3339 | Timestamp với timezone | "2025-12-29T10:30:45Z" | last_updated, start_date_time |
+| **Number** | decimal | Số thập phân | 25.50 | kwh, voltage, amperage |
+| **Price** | Price Object | {excl_vat, incl_vat} | {"excl_vat": 100, "incl_vat": 110} | total_cost, tariff prices |
+
+**⚠️ Lưu ý quan trọng về CiString**:
+- **CiString** = Case Insensitive String
+- Khi so sánh: "ABC" == "abc" == "Abc"
+- Áp dụng cho: `party_id`, `country_code`, `location_id`, `evse_uid`, `connector_id`, `session_id`, `tariff_id`, `cdr_id`
+- Database: Nên dùng CITEXT (PostgreSQL) hoặc case-insensitive collation
+
+#### Format chuẩn
+
+| Aspect | Specification | Chi tiết |
+|--------|---------------|----------|
+| **Encoding** | UTF-8 | Tất cả text data |
+| **Date/Time** | **RFC 3339** (YYYY-MM-DDTHH:mm:ssZ) | **BẮT BUỘC** có timezone, khuyến nghị dùng UTC (suffix Z) |
+| **Timezone** | UTC preferred | Luôn dùng UTC để tránh confusion |
+| **Number Format** | Decimal with dot separator | 25.5 (KHÔNG dùng 25,5) |
+| **Currency** | ISO 4217 codes | VND, USD, EUR, THB |
+| **Coordinates** | WGS84 decimal degrees | latitude: "10.7769", longitude: "106.7009" |
+| **Token Encoding** | **Base64** | Authorization header phải Base64 encode token |
+
+**Ví dụ DateTime hợp lệ (RFC 3339)**:
+```
+✅ 2025-12-29T10:30:45Z           (UTC - Khuyến nghị)
+✅ 2025-12-29T10:30:45.123Z       (UTC with milliseconds)
+✅ 2025-12-29T17:30:45+07:00      (với timezone offset)
+
+❌ 2025-12-29T10:30:45            (thiếu timezone - KHÔNG hợp lệ)
+❌ 2025-12-29 10:30:45Z           (thiếu 'T' - KHÔNG hợp lệ)
+```
+
+**Ví dụ Authorization Header (Base64 encoded)**:
+```http
+# Token gốc: ebf3b399-779f-4497-9b9d-ac6ad3cc44d2
+# Token sau khi Base64 encode:
+Authorization: Token ZWJmM2IzOTktNzc5Zi00NDk3LTliOWQtYWM2YWQzY2M0NGQy
+```
+
+**Code example: Base64 Token Encoding**:
+```python
+import base64
+
+def create_auth_header(token):
+    """Create OCPI 2.2.1-d2 compliant Authorization header"""
+    encoded_token = base64.b64encode(token.encode('utf-8')).decode('utf-8')
+    return f"Token {encoded_token}"
+
+# Usage
+token = "ebf3b399-779f-4497-9b9d-ac6ad3cc44d2"
+auth_header = create_auth_header(token)
+# Result: "Token ZWJmM2IzOTktNzc5Zi00NDk3LTliOWQtYWM2YWQzY2M0NGQy"
+```
+
+**Code example: RFC 3339 DateTime**:
+```python
+from datetime import datetime, timezone
+
+def ocpi_timestamp():
+    """Generate OCPI-compliant RFC 3339 timestamp (UTC)"""
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+# Result: "2025-12-29T10:30:45Z"
+```
 
 ### 5.7.4 Error Handling
 
