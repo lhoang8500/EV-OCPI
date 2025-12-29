@@ -102,8 +102,8 @@ Location (Trạm sạc)
 | Thuật ngữ | Tiếng Việt | Định nghĩa | Ví dụ |
 |-----------|------------|------------|-------|
 | **TOKEN_A** | Token đăng ký | Token Hub cấp cho CPO lần đầu, dùng để credentials exchange | One-time use |
-| **TOKEN_B** | Token Hub ban đầu | Token Hub cung cấp để CPO reference trong POST credentials | Reference only |
-| **TOKEN_C** | Token vận hành | Token chính thức sau credentials exchange, dùng cho tất cả operations | Long-term token |
+| **TOKEN_C** | Token vận hành | Token Hub trả về sau credentials exchange, CPO dùng cho tất cả operations | Long-term token |
+| **CPO_TOKEN** | Token của CPO | Token CPO tạo và gửi cho Hub, Hub dùng khi gọi vào CPO | CPO self-generated |
 | **Bearer Token** | Token xác thực | Format: `Authorization: Token {token_value}` | RFC 6750 |
 | **API Key** | Khóa API | Token để authenticate API calls | - |
 
@@ -377,8 +377,7 @@ sequenceDiagram
     
     Note over CPO,DB: PHASE 1: Onboarding & Registration
     CPO->>HUB: Đăng ký kết nối (offline)
-    HUB->>CPO: Cấp credentials (TOKEN_A, TOKEN_B)
-    HUB->>CPO: Gửi versions endpoint URL
+    HUB->>CPO: Cấp TOKEN_A và versions endpoint URL
     
     Note over CPO,DB: PHASE 2: Version Negotiation
     CPO->>HUB: GET /versions (TOKEN_A)
@@ -388,10 +387,10 @@ sequenceDiagram
     
     Note over CPO,DB: PHASE 3: Credentials Exchange
     CPO->>HUB: POST /credentials (TOKEN_A)
+    Note over CPO,HUB: CPO gửi token riêng của mình cho Hub
     HUB->>DB: Store CPO credentials
     HUB->>CPO: Return Hub credentials (TOKEN_C)
-    CPO->>HUB: PUT /credentials (TOKEN_C)
-    HUB->>CPO: Confirm credentials update
+    Note over CPO: CPO lưu TOKEN_C để dùng cho tất cả operations
     
     Note over CPO,DB: PHASE 4: Data Synchronization
     CPO->>HUB: PUT /locations (TOKEN_C)
@@ -400,9 +399,9 @@ sequenceDiagram
     HUB->>DB: Store tariffs
     
     Note over CPO,DB: PHASE 5: Live Operations
-    CPO->>HUB: Real-time updates (PATCH)
+    CPO->>HUB: Real-time updates (PATCH) với TOKEN_C
     HUB->>CPO: Acknowledgment
-    HUB->>CPO: Commands (POST)
+    HUB->>CPO: Commands (POST) với CPO_TOKEN
     CPO->>HUB: Command responses
 ```
 
@@ -410,18 +409,18 @@ sequenceDiagram
 
 ### 4.1.1 Giải thích chi tiết về các loại TOKEN
 
-Trong quy trình kết nối OCPI, có **3 loại TOKEN** khác nhau được sử dụng cho các mục đích khác nhau:
+Trong quy trình kết nối OCPI, có **2 loại TOKEN chính** được sử dụng:
 
 #### **TOKEN_A - Registration Token** (Token đăng ký ban đầu)
 
 **Đặc điểm**:
 - 🔑 **Ai cấp**: Hub cấp cho CPO trong quá trình onboarding (offline)
-- 🎯 **Mục đích**: Chỉ dùng cho **lần kết nối đầu tiên** và **credentials exchange**
+- 🎯 **Mục đích**: Chỉ dùng cho **lần kết nối đầu tiên** để:
+  - GET /versions
+  - GET /2.2.1 (version details)
+  - POST /credentials (credentials exchange)
 - ⏰ **Thời gian sống**: Thường là **one-time use** hoặc có thời hạn ngắn (1-7 ngày)
-- 🔒 **Quyền hạn**: Giới hạn - chỉ được phép truy cập endpoints:
-  - `GET /versions`
-  - `GET /2.2.1` (version detail)
-  - `POST /credentials` (lần đầu)
+- 🔒 **Quyền hạn**: Giới hạn - chỉ được phép truy cập endpoints liên quan đến registration
 
 **Ví dụ TOKEN_A**:
 ```
@@ -437,45 +436,11 @@ Authorization: Token a1b2c3d4-e5f6-4789-abcd-1234567890ab
 
 ---
 
-#### **TOKEN_B - Hub's Initial Token** (Token của Hub)
-
-**Đặc điểm**:
-- 🔑 **Ai cấp**: Hub cấp cho CPO kèm theo TOKEN_A
-- 🎯 **Mục đích**: CPO sẽ gửi TOKEN này về Hub trong **POST /credentials**
-- 📝 **Vai trò**: Để Hub nhận diện được CPO nào đang thực hiện credentials exchange
-- 🔒 **Quyền hạn**: Chỉ dùng để reference, không dùng làm authorization
-
-**Ví dụ TOKEN_B**:
-```json
-{
-  "token": "b9876543-21fe-dcba-9876-fedcba987654",
-  "url": "https://hub.example.com/ocpi/cpo/",
-  "party_id": "HUB",
-  "country_code": "VN"
-}
-```
-
-**Sử dụng** (CPO gửi trong credentials request):
-```http
-POST /ocpi/2.2.1/credentials HTTP/1.1
-Host: hub.example.com
-Authorization: Token a1b2c3d4-e5f6-4789-abcd-1234567890ab
-
-{
-  "token": "b9876543-21fe-dcba-9876-fedcba987654",
-  "url": "https://cpo.example.com/ocpi/hub/",
-  "party_id": "CPO",
-  "country_code": "VN"
-}
-```
-
----
-
 #### **TOKEN_C - Operational Token** (Token vận hành chính)
 
 **Đặc điểm**:
-- 🔑 **Ai cấp**: Hub trả về cho CPO sau khi credentials exchange thành công
-- 🎯 **Mục đích**: Token chính thức để **tất cả** giao tiếp OCPI sau này
+- 🔑 **Ai cấp**: Hub trả về cho CPO sau khi POST /credentials thành công
+- 🎯 **Mục đích**: Token chính thức để **tất cả** giao tiếp OCPI sau khi đã kết nối
 - ⏰ **Thời gian sống**: Dài hạn (90 ngày, 1 năm, hoặc không giới hạn)
 - 🔒 **Quyền hạn**: Full access tới tất cả OCPI modules
 
@@ -501,16 +466,33 @@ Authorization: Token c1111111-2222-3333-4444-555555555555
 
 ---
 
+#### **CPO_TOKEN - CPO's Own Token** (Token của CPO)
+
+**Đặc điểm**:
+- 🔑 **Ai tạo**: **CPO tự tạo**
+- 🎯 **Mục đích**: CPO gửi token này cho Hub trong POST /credentials, Hub sẽ dùng để authenticate khi gọi vào CPO
+- 🔄 **Direction**: Hub → CPO (ngược lại với TOKEN_C)
+- 🔒 **Quyền hạn**: CPO tự quyết định scope
+
+**Sử dụng** (Hub gửi commands đến CPO):
+```http
+POST /commands/START_SESSION HTTP/1.1
+Host: cpo.example.com
+Authorization: Token cpo-secret-token-12345
+```
+
+---
+
 ### 4.1.2 Bảng so sánh các loại TOKEN
 
-| Thuộc tính | TOKEN_A (Registration) | TOKEN_B (Hub Initial) | TOKEN_C (Operational) |
-|------------|------------------------|----------------------|----------------------|
-| **Người tạo** | Hub | Hub | Hub |
-| **Người sử dụng** | CPO → Hub | CPO reference only | CPO → Hub |
-| **Thời gian sống** | 1-7 ngày (one-time) | N/A (reference) | 90+ ngày |
-| **Scope** | Version, Credentials | N/A | All modules |
-| **Khi nào dùng** | Lần đầu kết nối | Trong credentials POST | Tất cả operations |
-| **Có thể rotate?** | ❌ No | ❌ No | ✅ Yes |
+| Thuộc tính | TOKEN_A (Registration) | TOKEN_C (Operational) | CPO_TOKEN |
+|------------|------------------------|----------------------|-----------|
+| **Người tạo** | Hub | Hub | CPO |
+| **Người sử dụng** | CPO → Hub | CPO → Hub | Hub → CPO |
+| **Thời gian sống** | 1-7 ngày (one-time) | 90+ ngày | Tùy CPO |
+| **Scope** | Version, Credentials | All modules | Commands, Tokens |
+| **Khi nào dùng** | Lần đầu kết nối | Tất cả operations | Hub calls CPO |
+| **Có thể rotate?** | ❌ No | ✅ Yes | ✅ Yes |
 
 ---
 
@@ -521,7 +503,6 @@ PHASE 1: Onboarding (Offline)
 ┌─────────────────────────────────────┐
 │ Hub cấp cho CPO:                    │
 │ - TOKEN_A: a1b2c3d4-e5f6-4789...    │
-│ - TOKEN_B: b9876543-21fe-dcba...    │
 │ - Versions URL                      │
 └─────────────────────────────────────┘
            ↓
@@ -531,7 +512,9 @@ PHASE 2-3: Credentials Exchange (Online)
 │ CPO dùng TOKEN_A để:                │
 │ - GET /versions                     │
 │ - GET /2.2.1                        │
-│ - POST /credentials (kèm TOKEN_B)   │
+│ - POST /credentials                 │
+│   + Authorization: TOKEN_A          │
+│   + Body: {token: "CPO_TOKEN", ...} │
 │                                     │
 │ Hub response:                       │
 │ - Trả về TOKEN_C: c1111111-2222...  │
@@ -540,14 +523,17 @@ PHASE 2-3: Credentials Exchange (Online)
 
 PHASE 4+: All Operations (Ongoing)
 ┌─────────────────────────────────────┐
-│ CPO chỉ dùng TOKEN_C cho:           │
+│ CPO → Hub (dùng TOKEN_C):           │
 │ - Locations                         │
 │ - Tariffs                           │
 │ - Sessions                          │
 │ - CDRs                              │
-│ - Commands responses                │
 │                                     │
-│ TOKEN_A & TOKEN_B không dùng nữa    │
+│ Hub → CPO (dùng CPO_TOKEN):         │
+│ - Commands (START/STOP)             │
+│ - Token validation                  │
+│                                     │
+│ TOKEN_A không dùng nữa              │
 └─────────────────────────────────────┘
 ```
 
@@ -555,9 +541,9 @@ PHASE 4+: All Operations (Ongoing)
 
 ### 4.1.4 TOKEN nào dùng cho module nào?
 
-#### ✅ Tất cả modules OCPI sử dụng **TOKEN_C** (Operational Token)
+#### ✅ Phân biệt rõ ràng direction
 
-**Sender Modules** (CPO gửi data đến Hub):
+**CPO → Hub (Sender modules):**
 
 | Module | Endpoint Example | Authorization Header |
 |--------|-----------------|---------------------|
@@ -566,16 +552,16 @@ PHASE 4+: All Operations (Ongoing)
 | **Sessions** | `PUT /sessions/VN/CPO/{id}` | `Token TOKEN_C` |
 | **CDRs** | `POST /cdrs` | `Token TOKEN_C` |
 
-**Receiver Modules** (CPO nhận commands từ Hub):
+**Hub → CPO (Receiver modules):**
 
-| Module | Endpoint Example | Authorization Header (Hub → CPO) |
-|--------|-----------------|----------------------------------|
+| Module | Endpoint Example | Authorization Header |
+|--------|-----------------|---------------------|
 | **Commands** | `POST /commands/START_SESSION` | `Token {CPO_TOKEN}` |
 | **Tokens** | `POST /tokens/{uid}/authorize` | `Token {CPO_TOKEN}` |
 
 **Lưu ý quan trọng**:
-- Hub gửi request đến CPO sẽ dùng token mà CPO đã cung cấp trong `POST /credentials`
-- Đây là TOKEN do CPO tạo và gửi cho Hub (reverse direction)
+- **CPO → Hub**: Dùng **TOKEN_C** (do Hub cấp sau credentials exchange)
+- **Hub → CPO**: Dùng **CPO_TOKEN** (do CPO tạo và gửi cho Hub trong POST /credentials)
 
 ---
 
@@ -655,15 +641,34 @@ Content-Type: application/json
 ```http
 PUT /ocpi/2.2.1/credentials HTTP/1.1
 Host: hub.example.com
-Authorization: Token c1111111-2222-3333-4444-555555555555
+Authorization: Token TOKEN_C
 
 {
-  "token": "c9999999-8888-7777-6666-555555555555",
+  "token": "cpo-new-token-67890",
   "url": "https://cpo.example.com/ocpi/hub/",
   "party_id": "ABC",
   "country_code": "VN"
 }
 ```
+
+---
+
+### 4.1.7 Quick Reference: TOKEN Usage Summary
+
+| Scenario | Authorization Header | Token Value | Direction |
+|----------|---------------------|-------------|-----------|
+| **Registration** | `Authorization: Token TOKEN_A` | Hub cấp | CPO → Hub |
+| **Locations** | `Authorization: Token TOKEN_C` | Hub cấp | CPO → Hub |
+| **Tariffs** | `Authorization: Token TOKEN_C` | Hub cấp | CPO → Hub |
+| **Sessions** | `Authorization: Token TOKEN_C` | Hub cấp | CPO → Hub |
+| **CDRs** | `Authorization: Token TOKEN_C` | Hub cấp | CPO → Hub |
+| **Commands** | `Authorization: Token CPO_TOKEN` | CPO tạo | Hub → CPO |
+| **Token validation** | `Authorization: Token CPO_TOKEN` | CPO tạo | Hub → CPO |
+
+**Công thức đơn giản**:
+- 📤 **CPO gửi đến Hub**: Dùng `TOKEN_C`
+- 📥 **Hub gửi đến CPO**: Dùng `CPO_TOKEN`
+- 🔐 **Lần đầu kết nối**: Dùng `TOKEN_A`
 
 ---
 
@@ -823,6 +828,8 @@ Các yêu cầu sau là **BẮT BUỘC** để CPO có thể kết nối thành 
 ### 5.5.2 Locations Module
 
 **Mục đích**: Quản lý thông tin trạm sạc, EVSE, connector
+
+**Authentication**: Sử dụng **TOKEN_C** cho tất cả requests (CPO → Hub)
 
 **Data Structure**:
 ```
@@ -1069,9 +1076,10 @@ Phần này cung cấp các ví dụ request thực tế để CPO dễ dàng t�
 ```http
 PUT /ocpi/sender/2.2.1/locations/VN/CPO/HCM-BTX-001 HTTP/1.1
 Host: hub.example.com
-Authorization: Token ebf3b399-779f-4497-9b9d-ac6ad3cc44d2
+Authorization: Token TOKEN_C
 Content-Type: application/json
 ```
+**Lưu ý**: Sử dụng **TOKEN_C** vì đây là CPO gửi data đến Hub (Sender role)
 
 **Body**:
 ```json
@@ -1202,7 +1210,7 @@ Content-Type: application/json
 ```http
 PATCH /ocpi/sender/2.2.1/locations/VN/CPO/HCM-BTX-001/evses/EVSE-001 HTTP/1.1
 Host: hub.example.com
-Authorization: Token ebf3b399-779f-4497-9b9d-ac6ad3cc44d2
+Authorization: Token TOKEN_C
 Content-Type: application/json
 ```
 
@@ -1222,7 +1230,7 @@ Content-Type: application/json
 ```http
 PATCH /ocpi/sender/2.2.1/locations/VN/CPO/HCM-BTX-001/evses/EVSE-001/connectors/1 HTTP/1.1
 Host: hub.example.com
-Authorization: Token ebf3b399-779f-4497-9b9d-ac6ad3cc44d2
+Authorization: Token TOKEN_C
 Content-Type: application/json
 ```
 
@@ -1242,7 +1250,7 @@ Content-Type: application/json
 ```http
 PUT /ocpi/sender/2.2.1/locations/VN/CPO/HN-CG-001 HTTP/1.1
 Host: hub.example.com
-Authorization: Token ebf3b399-779f-4497-9b9d-ac6ad3cc44d2
+Authorization: Token TOKEN_C
 Content-Type: application/json
 ```
 
@@ -1369,7 +1377,7 @@ Content-Type: application/json
 ```http
 PATCH /ocpi/sender/2.2.1/locations/VN/CPO/HCM-BTX-001 HTTP/1.1
 Host: hub.example.com
-Authorization: Token ebf3b399-779f-4497-9b9d-ac6ad3cc44d2
+Authorization: Token TOKEN_C
 Content-Type: application/json
 ```
 
@@ -1428,7 +1436,7 @@ Content-Type: application/json
 ```http
 PUT /ocpi/sender/2.2.1/locations/VN/CPO/HCM-BTX-001/evses/EVSE-002 HTTP/1.1
 Host: hub.example.com
-Authorization: Token ebf3b399-779f-4497-9b9d-ac6ad3cc44d2
+Authorization: Token TOKEN_C
 Content-Type: application/json
 ```
 
@@ -1470,7 +1478,7 @@ Content-Type: application/json
 ```http
 PATCH /ocpi/sender/2.2.1/locations/VN/CPO/HCM-BTX-001/evses/EVSE-001 HTTP/1.1
 Host: hub.example.com
-Authorization: Token ebf3b399-779f-4497-9b9d-ac6ad3cc44d2
+Authorization: Token TOKEN_C
 Content-Type: application/json
 ```
 
@@ -1513,6 +1521,8 @@ Content-Type: application/json
 ---
 
 ### 5.5.3 Tariffs Module
+
+**Authentication**: Sử dụng **TOKEN_C** cho tất cả requests (CPO → Hub)
 
 **Endpoints**:
 
@@ -1567,6 +1577,8 @@ Content-Type: application/json
 ### 5.5.4 Sessions Module
 
 **Lifecycle**: START → ACTIVE → COMPLETED
+
+**Authentication**: Sử dụng **TOKEN_C** cho tất cả requests (CPO → Hub)
 
 **Endpoints**:
 
@@ -1755,6 +1767,8 @@ sequenceDiagram
 
 **Trigger**: Gửi CDR trong vòng 24h sau khi session kết thúc
 
+**Authentication**: Sử dụng **TOKEN_C** cho tất cả requests (CPO → Hub)
+
 **Endpoint**:
 
 | Method | Endpoint | CPO Role | Trigger | Max Delay |
@@ -1799,6 +1813,8 @@ sequenceDiagram
 ### 5.5.6 Commands Module (Receiver)
 
 CPO phải implement các endpoints để nhận commands từ Hub:
+
+**Authentication**: Hub sử dụng **CPO_TOKEN** khi gọi vào CPO (Hub → CPO)
 
 **Endpoints**:
 
